@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Club Progress
 // @namespace    https://github.com/alech/geoguessr-club-progress
-// @version      1.4.1
+// @version      1.5.0
 // @description  Club page "Progress" tab: weekly mission progress per member and challenge day.
 // @author       Alexander Klink
 // @homepageURL  https://github.com/alech/geoguessr-club-progress
@@ -84,6 +84,9 @@
       // reaches the total even if nothing more gets done today.
       stillNeeded: Math.ceil(Math.max(0, total - finished) / Math.max(1, daysAhead)),
       daysAhead,
+      // Once the last board is cleared, currentBoardNumber points one past it.
+      cleared:
+        board.allBoardsCleared || !board.boards.some((b) => b.number === board.currentBoardNumber),
       finished,
       today,
       tiles,
@@ -168,12 +171,17 @@
     const end = Date.parse(board.periodEnd);
     const nextDay = s.periodStart + (s.today + 1) * DAY_MS;
     const you = board.you ?? {};
-    const claim = you.canClaim
-      ? "you can take a mission now"
-      : `your next mission in ${fmtDuration(Date.parse(you.nextDayAt) - now)}`;
+    const nextClaim = Date.parse(you.nextDayAt);
+    let claim = "you can take a mission now";
+    if (s.cleared) claim = "all boards cleared, nothing left to take";
+    else if (!you.canClaim && nextClaim) {
+      claim = `your next mission in ${fmtDuration(nextClaim - now)}`;
+    } else if (!you.canClaim) claim = "you can't take a mission right now";
     const stats = [
-      ["Board", `${board.currentBoardNumber} of ${board.boards.length}`],
-      ["This board", current ? `${done} / ${current.tiles.length}` : "–"],
+      s.cleared
+        ? ["Board", `all ${board.boards.length} cleared 🎉`]
+        : ["Board", `${board.currentBoardNumber} of ${board.boards.length}`],
+      ["This board", s.cleared ? "–" : `${done} / ${current.tiles.length}`],
       ["Next challenge day", fmtDuration(nextDay - now)],
       ["Week ends", `${board.periodEnd.slice(0, 10)} (${fmtDuration(end - now)})`],
     ];
@@ -194,8 +202,8 @@
     const onTrack = s.finished >= s.total || projected >= s.total;
     const left = s.total - s.finished;
     const verdict =
-      left <= 0
-        ? "All boards cleared!"
+      s.cleared || left <= 0
+        ? "🎉 All boards cleared! 🎉"
         : `${onTrack ? "On track" : "Behind pace"}: at this speed ≈${projected} by week's end` +
           ` · ${left} to go` +
           (s.daysAhead ? `, ${s.stillNeeded} a day needed from tomorrow` : " today");
@@ -225,7 +233,13 @@
     const line = (n, tip) =>
       `<u style="left:${(100 * n) / scale}%" data-tip="${esc(tip)}"></u>`;
     const fixed = line(s.dailyTarget, `Target: ${s.dailyTarget} a day`);
-    const ahead = line(s.stillNeeded, `Still needed: ${s.stillNeeded} a day to clear all boards`);
+    // Nothing left to do: no line on the days ahead rather than one at 0.
+    const ahead = s.stillNeeded
+      ? line(s.stillNeeded, `Still needed: ${s.stillNeeded} a day to clear all boards`)
+      : "";
+    const aheadNote = s.stillNeeded
+      ? `; on days ahead, the ${s.stillNeeded} a day still needed`
+      : "";
     const rows = counts.map((n, i) => {
       const isToday = i === s.today;
       const target = i > s.today ? ahead : fixed;
@@ -240,8 +254,7 @@
     return `
       <section>
         <h3>Missions finished per challenge day
-          <small>line marks the target of ${s.dailyTarget} a day; on days ahead, the
-            ${s.stillNeeded} a day still needed</small></h3>
+          <small>line marks the target of ${s.dailyTarget} a day${aheadNote}</small></h3>
         ${rows.join("")}
       </section>`;
   }
@@ -385,7 +398,9 @@
         loadNicks(),
       ]);
       const s = summarize(board, nicks);
-      panel.innerHTML = [renderHeader, renderOpen, renderDays, renderPlayers, renderMissions]
+      const sections = [renderHeader, renderOpen, renderDays, renderPlayers, renderMissions];
+      panel.innerHTML = sections
+        .filter((render) => !(s.cleared && render === renderOpen)) // nothing left to work on
         .map((render) => render(s))
         .join("");
     } catch (error) {
