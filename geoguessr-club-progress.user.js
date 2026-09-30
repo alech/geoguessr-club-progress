@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Club Progress
 // @namespace    https://github.com/alech/geoguessr-club-progress
-// @version      1.5.1
+// @version      1.5.2
 // @description  Club page "Progress" tab: weekly mission progress per member and challenge day.
 // @author       Alexander Klink
 // @homepageURL  https://github.com/alech/geoguessr-club-progress
@@ -77,6 +77,7 @@
     const cleared =
       board.allBoardsCleared || !board.boards.some((b) => b.number === board.currentBoardNumber);
     const finishedDays = tiles.filter((t) => t.completed).map((t) => t.day);
+    const clearedDay = cleared && finishedDays.length ? Math.max(...finishedDays) : null;
     return {
       board,
       periodStart,
@@ -89,8 +90,10 @@
       stillNeeded: Math.ceil(Math.max(0, total - finished) / Math.max(1, daysAhead)),
       daysAhead,
       cleared,
-      // Challenge day the last mission was finished in; from then on nothing more is needed.
-      clearedDay: cleared && finishedDays.length ? Math.max(...finishedDays) : null,
+      // Challenge day the last mission was finished in; after it nothing more is needed.
+      clearedDay,
+      // What was still left when that day started, i.e. what it had to (and did) finish.
+      clearingNeeded: total - finishedDays.filter((d) => d < clearedDay).length,
       finished,
       today,
       tiles,
@@ -226,6 +229,7 @@
   const afterClear = (i, s) => s.clearedDay !== null && i >= s.clearedDay;
 
   function dayTarget(i, s) {
+    if (i === s.clearedDay) return s.clearingNeeded;
     if (afterClear(i, s)) return 0;
     return i > s.today ? s.stillNeeded : s.dailyTarget;
   }
@@ -241,13 +245,16 @@
   function targetLine(i, s, scale) {
     const n = dayTarget(i, s);
     let tip = `Target: ${n} a day`;
-    if (afterClear(i, s)) tip = "All boards cleared, nothing more needed";
+    if (i === s.clearedDay) tip = `${n} left to clear all boards, and all of them got done`;
+    else if (afterClear(i, s)) tip = "All boards cleared, nothing more needed";
     else if (i > s.today) tip = `Still needed: ${n} a day to clear all boards`;
     return `<u style="left:${(100 * n) / scale}%" data-tip="${esc(tip)}"></u>`;
   }
 
   function daysNote(s) {
-    if (s.clearedDay !== null) return "; 0 from the day all boards were cleared";
+    if (s.clearedDay !== null) {
+      return `; on the day all boards were cleared, the ${s.clearingNeeded} left, then 0`;
+    }
     if (!s.daysAhead) return "";
     return `; on days ahead, the ${s.stillNeeded} a day still needed`;
   }
