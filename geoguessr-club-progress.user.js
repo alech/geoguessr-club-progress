@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Club Progress
 // @namespace    https://github.com/alech/geoguessr-club-progress
-// @version      1.5.0
+// @version      1.5.1
 // @description  Club page "Progress" tab: weekly mission progress per member and challenge day.
 // @author       Alexander Klink
 // @homepageURL  https://github.com/alech/geoguessr-club-progress
@@ -73,6 +73,10 @@
     const finished = tiles.filter((t) => t.completed).length;
     const today = challengeDay(new Date().toISOString(), periodStart);
     const daysAhead = Math.max(0, dayCount - today - 1);
+    // Once the last board is cleared, currentBoardNumber points one past it.
+    const cleared =
+      board.allBoardsCleared || !board.boards.some((b) => b.number === board.currentBoardNumber);
+    const finishedDays = tiles.filter((t) => t.completed).map((t) => t.day);
     return {
       board,
       periodStart,
@@ -84,9 +88,9 @@
       // reaches the total even if nothing more gets done today.
       stillNeeded: Math.ceil(Math.max(0, total - finished) / Math.max(1, daysAhead)),
       daysAhead,
-      // Once the last board is cleared, currentBoardNumber points one past it.
-      cleared:
-        board.allBoardsCleared || !board.boards.some((b) => b.number === board.currentBoardNumber),
+      cleared,
+      // Challenge day the last mission was finished in; from then on nothing more is needed.
+      clearedDay: cleared && finishedDays.length ? Math.max(...finishedDays) : null,
       finished,
       today,
       tiles,
@@ -219,30 +223,42 @@
       </div>`;
   }
 
+  const afterClear = (i, s) => s.clearedDay !== null && i >= s.clearedDay;
+
+  function dayTarget(i, s) {
+    if (afterClear(i, s)) return 0;
+    return i > s.today ? s.stillNeeded : s.dailyTarget;
+  }
+
   function dayStatus(n, i, s) {
     if (i > s.today) return "future";
+    if (afterClear(i, s)) return "good"; // the boards got cleared, so the day did its part
     if (n > s.dailyTarget) return "good";
     if (n === s.dailyTarget) return "ok";
     return i === s.today ? "running" : "bad"; // today isn't over yet, so don't call it short
+  }
+
+  function targetLine(i, s, scale) {
+    const n = dayTarget(i, s);
+    let tip = `Target: ${n} a day`;
+    if (afterClear(i, s)) tip = "All boards cleared, nothing more needed";
+    else if (i > s.today) tip = `Still needed: ${n} a day to clear all boards`;
+    return `<u style="left:${(100 * n) / scale}%" data-tip="${esc(tip)}"></u>`;
+  }
+
+  function daysNote(s) {
+    if (s.clearedDay !== null) return "; 0 from the day all boards were cleared";
+    if (!s.daysAhead) return "";
+    return `; on days ahead, the ${s.stillNeeded} a day still needed`;
   }
 
   function renderDays(s) {
     const counts = Array.from({ length: s.dayCount }, () => 0);
     for (const t of s.tiles) if (t.day !== null && t.day < s.dayCount) counts[t.day] += 1;
     const scale = Math.max(Math.max(s.dailyTarget, s.stillNeeded) + 4, ...counts);
-    const line = (n, tip) =>
-      `<u style="left:${(100 * n) / scale}%" data-tip="${esc(tip)}"></u>`;
-    const fixed = line(s.dailyTarget, `Target: ${s.dailyTarget} a day`);
-    // Nothing left to do: no line on the days ahead rather than one at 0.
-    const ahead = s.stillNeeded
-      ? line(s.stillNeeded, `Still needed: ${s.stillNeeded} a day to clear all boards`)
-      : "";
-    const aheadNote = s.stillNeeded
-      ? `; on days ahead, the ${s.stillNeeded} a day still needed`
-      : "";
     const rows = counts.map((n, i) => {
       const isToday = i === s.today;
-      const target = i > s.today ? ahead : fixed;
+      const target = targetLine(i, s, scale);
       const label = `${fmtDate(s.periodStart + i * DAY_MS)}${isToday ? " · today" : ""}`;
       return `
         <div class="tbgg-day ${dayStatus(n, i, s)}${isToday ? " today" : ""}">
@@ -254,7 +270,7 @@
     return `
       <section>
         <h3>Missions finished per challenge day
-          <small>line marks the target of ${s.dailyTarget} a day${aheadNote}</small></h3>
+          <small>line marks the target of ${s.dailyTarget} a day${daysNote(s)}</small></h3>
         ${rows.join("")}
       </section>`;
   }
