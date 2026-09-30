@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Club Progress
 // @namespace    https://github.com/alech/geoguessr-club-progress
-// @version      1.5.2
+// @version      1.5.3
 // @description  Club page "Progress" tab: weekly mission progress per member and challenge day.
 // @author       Alexander Klink
 // @homepageURL  https://github.com/alech/geoguessr-club-progress
@@ -92,6 +92,10 @@
       cleared,
       // Challenge day the last mission was finished in; after it nothing more is needed.
       clearedDay,
+      // When the last mission was finished (ISO timestamps sort as strings).
+      clearedAt: cleared
+        ? tiles.reduce((max, t) => (t.completedAt > max ? t.completedAt : max), "")
+        : "",
       // What was still left when that day started, i.e. what it had to (and did) finish.
       clearingNeeded: total - finishedDays.filter((d) => d < clearedDay).length,
       finished,
@@ -208,15 +212,20 @@
     const projected = Math.round((s.finished / elapsed) * weekMs);
     const onTrack = s.finished >= s.total || projected >= s.total;
     const left = s.total - s.finished;
+    // "2026-09-28T19:42:07.1230000Z" -> "2026-09-28 19:42"
+    const when = s.clearedAt ? ` on ${s.clearedAt.slice(0, 16).replace("T", " ")} UTC` : "";
     const verdict =
       s.cleared || left <= 0
-        ? "🎉 All boards cleared! 🎉"
+        ? `🎉 All boards cleared${when}! 🎉`
         : `${onTrack ? "On track" : "Behind pace"}: at this speed ≈${projected} by week's end` +
           ` · ${left} to go` +
           (s.daysAhead ? `, ${s.stillNeeded} a day needed from tomorrow` : " today");
     const pct = (n) => `${Math.min(100, (100 * n) / s.total)}%`;
     const paceTip = "Where an even pace would be now";
-    const pace = `<u style="left:${(100 * elapsed) / weekMs}%" data-tip="${paceTip}"></u>`;
+    // Once everything is cleared there is no pace left to keep, so drop the marker.
+    const pace = s.cleared
+      ? ""
+      : `<u style="left:${(100 * elapsed) / weekMs}%" data-tip="${paceTip}"></u>`;
     return `
       <div class="tbgg-overall ${onTrack ? "good" : "bad"}">
         <div class="tbgg-overall-top">
