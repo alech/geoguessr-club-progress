@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Club Progress
 // @namespace    https://github.com/alech/geoguessr-club-progress
-// @version      1.5.3
+// @version      1.6.0
 // @description  Club page "Progress" tab: weekly mission progress per member and challenge day.
 // @author       Alexander Klink
 // @homepageURL  https://github.com/alech/geoguessr-club-progress
@@ -23,8 +23,11 @@
   const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const OPEN_WARN_MS = 6 * 3_600_000;
   const OPEN_ALERT_MS = 12 * 3_600_000;
+  const BOARD_API = "/api/v4/missions/club/board";
+  const WEEKS_KEY = "tbgg-progress-weeks";
 
-  const state = { active: false, prevTab: null, timer: null, nicks: null };
+  // week: periodKey of the week shown, or null for the current one.
+  const state = { active: false, prevTab: null, timer: null, nicks: null, week: null };
 
   // ---------- data ----------
 
@@ -40,6 +43,28 @@
     const members = await getJson(`/api/v4/clubs/${clubId}/members`);
     state.nicks = new Map(members.map((m) => [m.user.userId, m.user.nick]));
     return state.nicks;
+  }
+
+  // The API only returns the current and the previous week, so every week seen is kept in
+  // localStorage (per browser) to build up a history: {periodKey: {board, nicks: [[id, nick]]}}.
+  function loadWeeks() {
+    try {
+      return JSON.parse(localStorage.getItem(WEEKS_KEY)) ?? {};
+    } catch {
+      return {};
+    }
+  }
+
+  function saveWeek(weeks, board, nicks) {
+    if (!board?.periodKey) return;
+    // Keep names of people who have left the club since.
+    const known = new Map([...(weeks[board.periodKey]?.nicks ?? []), ...nicks]);
+    weeks[board.periodKey] = { board, nicks: [...known] };
+    try {
+      localStorage.setItem(WEEKS_KEY, JSON.stringify(weeks));
+    } catch {
+      // Storage full or blocked: the history just isn't kept beyond this page load.
+    }
   }
 
   function challengeDay(ts, periodStart) {
@@ -100,6 +125,7 @@
       clearingNeeded: total - finishedDays.filter((d) => d < clearedDay).length,
       finished,
       today,
+      past: Date.now() >= Date.parse(board.periodEnd),
       tiles,
       players: summarizePlayers(tiles, nicks, dayCount),
       nick: (id) => nicks.get(id) ?? id.slice(0, 8),
@@ -174,35 +200,61 @@
 
   // ---------- rendering ----------
 
-  function renderHeader(s) {
+  const weekLabel = (board) =>
+    `${board.periodStart.slice(0, 10)} – ${board.periodEnd.slice(0, 10)}`;
+
+  function claimNote(s) {
+    if (s.past) return "this week is over";
+    if (s.cleared) return "all boards cleared, nothing left to take";
+    const you = s.board.you ?? {};
+    const nextClaim = Date.parse(you.nextDayAt);
+    if (you.canClaim) return "you can take a mission now";
+    if (nextClaim) return `your next mission in ${fmtDuration(nextClaim - Date.now())}`;
+    return "you can't take a mission right now";
+  }
+
+  function headerStats(s) {
     const { board } = s;
     const current = board.boards.find((b) => b.number === board.currentBoardNumber);
     const done = current ? current.tiles.filter((t) => t.completed).length : 0;
     const now = Date.now();
-    const end = Date.parse(board.periodEnd);
-    const nextDay = s.periodStart + (s.today + 1) * DAY_MS;
-    const you = board.you ?? {};
-    const nextClaim = Date.parse(you.nextDayAt);
-    let claim = "you can take a mission now";
-    if (s.cleared) claim = "all boards cleared, nothing left to take";
-    else if (!you.canClaim && nextClaim) {
-      claim = `your next mission in ${fmtDuration(nextClaim - now)}`;
-    } else if (!you.canClaim) claim = "you can't take a mission right now";
     const stats = [
       s.cleared
         ? ["Board", `all ${board.boards.length} cleared 🎉`]
         : ["Board", `${board.currentBoardNumber} of ${board.boards.length}`],
       ["This board", s.cleared ? "–" : `${done} / ${current.tiles.length}`],
+    ];
+    if (s.past) return [...stats, ["Week", weekLabel(board)]];
+    const nextDay = s.periodStart + (s.today + 1) * DAY_MS;
+    const end = Date.parse(board.periodEnd);
+    return [
+      ...stats,
       ["Next challenge day", fmtDuration(nextDay - now)],
       ["Week ends", `${board.periodEnd.slice(0, 10)} (${fmtDuration(end - now)})`],
     ];
-    const cells = stats.map(([k, v]) => `<div><span>${esc(k)}</span><b>${esc(v)}</b></div>`);
+  }
+
+  function weekPicker(s) {
+    if (s.weeks.length < 2) return "";
+    const options = s.weeks.map(({ key, label }) => {
+      const selected = key === s.board.periodKey ? " selected" : "";
+      return `<option value="${esc(key)}"${selected}>${esc(label)}</option>`;
+    });
+    return `<select class="tbgg-week" aria-label="Week">${options.join("")}</select>`;
+  }
+
+  function renderHeader(s) {
+    const cells = headerStats(s).map(
+      ([k, v]) => `<div><span>${esc(k)}</span><b>${esc(v)}</b></div>`,
+    );
+    const note = `All times UTC · challenge days start 11:00 UTC · ${claimNote(s)}`;
     return `
       <div class="tbgg-head">
         <div class="tbgg-stats">${cells.join("")}</div>
         ${renderOverall(s)}
-        <div class="tbgg-sub">All times UTC · challenge days start 11:00 UTC · ${esc(claim)}
-          <button type="button" class="tbgg-refresh">Refresh</button></div>
+        <div class="tbgg-sub">${esc(note)}
+          <span class="tbgg-actions">${weekPicker(s)}
+            <button type="button" class="tbgg-refresh">Refresh</button></span></div>
       </div>`;
   }
 
@@ -214,20 +266,22 @@
     const left = s.total - s.finished;
     // "2026-09-28T19:42:07.1230000Z" -> "2026-09-28 19:42"
     const when = s.clearedAt ? ` on ${s.clearedAt.slice(0, 16).replace("T", " ")} UTC` : "";
-    const verdict =
-      s.cleared || left <= 0
-        ? `🎉 All boards cleared${when}! 🎉`
-        : `${onTrack ? "On track" : "Behind pace"}: at this speed ≈${projected} by week's end` +
-          ` · ${left} to go` +
-          (s.daysAhead ? `, ${s.stillNeeded} a day needed from tomorrow` : " today");
+    let verdict =
+      `${onTrack ? "On track" : "Behind pace"}: at this speed ≈${projected} by week's end` +
+      ` · ${left} to go` +
+      (s.daysAhead ? `, ${s.stillNeeded} a day needed from tomorrow` : " today");
+    if (s.cleared || left <= 0) verdict = `🎉 All boards cleared${when}! 🎉`;
+    else if (s.past) verdict = `Week ended ${left} short of clearing all boards`;
+    const good = s.past ? s.cleared : onTrack;
     const pct = (n) => `${Math.min(100, (100 * n) / s.total)}%`;
     const paceTip = "Where an even pace would be now";
-    // Once everything is cleared there is no pace left to keep, so drop the marker.
-    const pace = s.cleared
-      ? ""
-      : `<u style="left:${(100 * elapsed) / weekMs}%" data-tip="${paceTip}"></u>`;
+    // Once everything is cleared or the week is over there is no pace left to keep.
+    const pace =
+      s.cleared || s.past
+        ? ""
+        : `<u style="left:${(100 * elapsed) / weekMs}%" data-tip="${paceTip}"></u>`;
     return `
-      <div class="tbgg-overall ${onTrack ? "good" : "bad"}">
+      <div class="tbgg-overall ${good ? "good" : "bad"}">
         <div class="tbgg-overall-top">
           <b>${s.finished} / ${s.total}</b><span>${esc(verdict)}</span>
         </div>
@@ -425,14 +479,28 @@
   async function refresh(panel) {
     panel.querySelector(".tbgg-refresh")?.setAttribute("disabled", "");
     try {
-      const [board, nicks] = await Promise.all([
-        getJson("/api/v4/missions/club/board"),
+      const [current, previous, nicks] = await Promise.all([
+        getJson(BOARD_API),
+        getJson(`${BOARD_API}/previous`).catch(() => null), // null until a week has ended
         loadNicks(),
       ]);
-      const s = summarize(board, nicks);
+      const weeks = loadWeeks();
+      saveWeek(weeks, current, nicks);
+      saveWeek(weeks, previous, nicks);
+      const stored = state.week && weeks[state.week];
+      const s = stored
+        ? summarize(stored.board, new Map(stored.nicks))
+        : summarize(current, nicks);
+      s.weeks = Object.keys(weeks)
+        .sort()
+        .reverse()
+        .map((key) => ({
+          key,
+          label: key === current.periodKey ? "This week" : weekLabel(weeks[key].board),
+        }));
       const sections = [renderHeader, renderOpen, renderDays, renderPlayers, renderMissions];
       panel.innerHTML = sections
-        .filter((render) => !(s.cleared && render === renderOpen)) // nothing left to work on
+        .filter((render) => !((s.cleared || s.past) && render === renderOpen)) // nothing open
         .map((render) => render(s))
         .join("");
     } catch (error) {
@@ -473,6 +541,11 @@
       panel.addEventListener("click", (e) => {
         if (e.target.closest(".tbgg-refresh")) refresh(panel);
       });
+      panel.addEventListener("change", (e) => {
+        if (!e.target.matches(".tbgg-week")) return;
+        state.week = e.target.selectedIndex === 0 ? null : e.target.value;
+        refresh(panel);
+      });
       wrapper.after(panel);
     }
     panel.hidden = false;
@@ -484,6 +557,7 @@
     if (state.active) return;
     state.active = true;
     state.nicks = null; // pick up membership changes
+    state.week = null; // always open on the current week
     state.prevTab = tabs.list.querySelector('[role="tab"][data-state="active"]');
     if (state.prevTab) setTabState(state.prevTab, false);
     setTabState(button, true);
@@ -613,8 +687,8 @@
       margin-top: 0.75rem;
       color: rgb(255 255 255 / 65%);
     }
-    .tbgg-refresh {
-      margin-left: auto;
+    .tbgg-actions { display: flex; gap: 0.5rem; margin-left: auto; }
+    .tbgg-week, .tbgg-refresh {
       padding: 0.3rem 0.9rem;
       border: 1px solid rgb(255 255 255 / 25%);
       border-radius: 999px;
@@ -623,7 +697,8 @@
       font: inherit;
       cursor: pointer;
     }
-    .tbgg-refresh:hover { background: rgb(255 255 255 / 20%); }
+    .tbgg-week option { background: #1b1040; color: #fff; }
+    .tbgg-week:hover, .tbgg-refresh:hover { background: rgb(255 255 255 / 20%); }
     .tbgg-refresh[disabled] { opacity: 0.5; cursor: default; }
     .tbgg-overall { margin-top: 1rem; }
     .tbgg-overall-top {
@@ -638,7 +713,7 @@
     .tbgg-overall.bad .tbgg-overall-top span { color: #e94560; }
     .tbgg-day {
       display: grid;
-      grid-template-columns: 8rem 1fr 2rem;
+      grid-template-columns: 9.5rem 1fr 2rem;
       align-items: center;
       gap: 0.75rem;
       padding: 0.15rem 0;

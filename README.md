@@ -29,6 +29,8 @@ userscript adds a **Progress** tab next to **Stats** on your club page that does
   which missions it was.
 - **Missions** — every finished mission, grouped by challenge day, with who took
   it, when, and who helped.
+- **Earlier weeks** — a week picker next to the Refresh button shows the same
+  overview for past weeks.
 
 All times are shown in UTC. The tab refreshes itself once a minute while it is
 open.
@@ -38,6 +40,12 @@ open.
 The script reads the same endpoints the club page uses —
 `/api/v4/missions/club/board` for the board and `/api/v4/clubs/{id}/members`
 for nicknames — with your existing GeoGuessr session. It never writes anything.
+
+GeoGuessr only offers the current and the previous week
+(`/api/v4/missions/club/board/previous`), so the script saves every week it sees
+in your browser's local storage. The week picker therefore starts with last
+week and grows from there; it only knows about weeks while you had the script
+installed, and only in that browser.
 
 GeoGuessr is a single-page app, so the script watches the page for the club tab
 bar, adds a copy of one of its tab buttons, and swaps in its own panel when that
