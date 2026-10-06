@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Club Progress
 // @namespace    https://github.com/alech/geoguessr-club-progress
-// @version      1.6.1
+// @version      1.6.2
 // @description  Club page "Progress" tab: weekly mission progress per member and challenge day.
 // @author       Alexander Klink
 // @homepageURL  https://github.com/alech/geoguessr-club-progress
@@ -349,13 +349,16 @@
   }
 
   function mark(tiles, cls) {
-    if (!tiles.length) return "";
+    if (!tiles.length) return "<span></span>"; // keep the slot so marks line up across rows
     return `<span class="${cls}">${tiles.length > 1 ? tiles.length : "✓"}</span>`;
   }
 
   function dayCell({ done, helped }, i, s) {
     const cls = todayCls(i, s);
-    if (!done.length && !helped.length) return `<td${cls}>${i > s.today ? "" : "·"}</td>`;
+    if (!done.length && !helped.length) {
+      const dot = i > s.today ? "" : "·";
+      return `<td${cls}><span class="tbgg-marks"><span>${dot}</span><span></span></span></td>`;
+    }
     const when = (t) =>
       `taken ${fmtTime(Date.parse(t.claimedAt))} → done ${fmtTime(Date.parse(t.completedAt))}`;
     const tip = [
@@ -789,7 +792,14 @@
       font-size: 0.75rem;
       font-weight: 700;
     }
-    .tbgg-marks { display: inline-flex; align-items: center; gap: 3px; }
+    .tbgg-marks {
+      display: inline-grid;
+      grid-template-columns: 1.3rem 0.95rem; /* finished, helped */
+      grid-template-rows: 1.3rem;
+      place-items: center;
+      gap: 3px;
+      vertical-align: middle;
+    }
     .tbgg-check.small { width: 0.95rem; height: 0.95rem; font-size: 0.6rem; background: #7950e5; }
     .tbgg-players td[data-tip], .tbgg-open, .tbgg-bar u { cursor: help; }
     #tbgg-tip {
