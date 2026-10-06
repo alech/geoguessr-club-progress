@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Club Progress
 // @namespace    https://github.com/alech/geoguessr-club-progress
-// @version      1.6.0
+// @version      1.6.1
 // @description  Club page "Progress" tab: weekly mission progress per member and challenge day.
 // @author       Alexander Klink
 // @homepageURL  https://github.com/alech/geoguessr-club-progress
@@ -92,6 +92,9 @@
           board: b.number,
           title: tileTitle(t, templates),
           day: t.completedAt ? challengeDay(t.completedAt, periodStart) : null,
+          // A mission belongs to the challenge day it was taken in, even if finished later;
+          // that is what the daily claim limit counts. Helps go on the same day.
+          takenDay: challengeDay(t.claimedAt, periodStart),
         })),
     );
     const total = board.boards.reduce((n, b) => n + b.tiles.length, 0);
@@ -155,12 +158,12 @@
         p.open = t;
         continue;
       }
-      const inWeek = t.day >= 0 && t.day < dayCount;
+      const inWeek = (d) => d >= 0 && d < dayCount;
       p.completed += 1;
-      if (inWeek) p.days[t.day].done.push(t);
+      if (inWeek(t.takenDay)) p.days[t.takenDay].done.push(t);
       for (const h of t.helpers) {
         get(h).helped += 1;
-        if (inWeek) get(h).days[t.day].helped.push(t);
+        if (inWeek(t.takenDay)) get(h).days[t.takenDay].helped.push(t);
       }
     }
     return [...players.values()].sort(
@@ -353,10 +356,11 @@
   function dayCell({ done, helped }, i, s) {
     const cls = todayCls(i, s);
     if (!done.length && !helped.length) return `<td${cls}>${i > s.today ? "" : "·"}</td>`;
-    const when = (t) => fmtTime(Date.parse(t.completedAt));
+    const when = (t) =>
+      `taken ${fmtTime(Date.parse(t.claimedAt))} → done ${fmtTime(Date.parse(t.completedAt))}`;
     const tip = [
-      ...done.map((t) => `✓ ${when(t)} · ${t.title}`),
-      ...helped.map((t) => `Helped ${s.nick(t.claimedBy)} · ${when(t)} · ${t.title}`),
+      ...done.map((t) => `✓ ${t.title} · ${when(t)}`),
+      ...helped.map((t) => `Helped ${s.nick(t.claimedBy)}: ${t.title} · ${when(t)}`),
     ].join("\n");
     const marks = mark(done, "tbgg-check") + mark(helped, "tbgg-check small");
     return `<td${cls} data-tip="${esc(tip)}"><span class="tbgg-marks">${marks}</span></td>`;
@@ -384,7 +388,8 @@
     });
     return `
       <section>
-        <h3>Members <small>✓ finished · small ✓ helped · hover for details</small></h3>
+        <h3>Members <small>✓ finished · small ✓ helped · on the day the mission was taken ·
+          hover for details</small></h3>
         <div class="tbgg-scroll"><table class="tbgg-players">
           <thead><tr>
             <th class="name">Player</th><th class="num">Done</th><th class="num">Helped</th>
