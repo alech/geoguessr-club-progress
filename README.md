@@ -33,6 +33,13 @@ userscript adds a **Progress** tab next to **Stats** on your club page that does
   it, when, and who helped.
 - **Earlier weeks** — a week picker next to the Refresh button shows the same
   overview for past weeks.
+- **Notifications** — the 🔔/🔕 button turns on desktop notifications whenever
+  someone takes a mission, asks for help with it, starts helping with one, or
+  finishes one. They come from the tab's once-a-minute
+  refresh, so they only arrive while the Progress tab is open (it keeps
+  refreshing in a background browser tab while notifications are on). Your
+  browser asks for permission the first time. The ⚙ button next to it picks
+  which of the four kinds you want.
 
 All times are shown in UTC. The tab refreshes itself once a minute while it is
 open.

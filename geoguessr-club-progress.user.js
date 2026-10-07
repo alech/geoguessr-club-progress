@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Club Progress
 // @namespace    https://github.com/alech/geoguessr-club-progress
-// @version      1.6.2
+// @version      1.9.0
 // @description  Club page "Progress" tab: weekly mission progress per member and challenge day.
 // @author       Alexander Klink
 // @homepageURL  https://github.com/alech/geoguessr-club-progress
@@ -25,9 +25,28 @@
   const OPEN_ALERT_MS = 12 * 3_600_000;
   const BOARD_API = "/api/v4/missions/club/board";
   const WEEKS_KEY = "tbgg-progress-weeks";
+  const NOTIFY_KEY = "tbgg-progress-notify";
+  const KINDS_KEY = "tbgg-progress-notify-kinds";
+  // Kinds of notification (the prefix of each event's tag) and their label in the ⚙ menu.
+  const NOTIFY_KINDS = [
+    ["take", "Mission taken"],
+    ["ask", "Help requested"],
+    ["help", "Someone started helping"],
+    ["done", "Mission finished"],
+  ];
 
   // week: periodKey of the week shown, or null for the current one.
-  const state = { active: false, prevTab: null, timer: null, nicks: null, week: null };
+  // seen: the current board as of the last refresh, to notify about what changed since.
+  // menuOpen: whether the ⚙ menu is open, so the once-a-minute redraw doesn't close it.
+  const state = {
+    active: false,
+    prevTab: null,
+    timer: null,
+    nicks: null,
+    week: null,
+    seen: null,
+    menuOpen: false,
+  };
 
   // ---------- data ----------
 
@@ -256,7 +275,7 @@
         <div class="tbgg-stats">${cells.join("")}</div>
         ${renderOverall(s)}
         <div class="tbgg-sub">${esc(note)}
-          <span class="tbgg-actions">${weekPicker(s)}
+          <span class="tbgg-actions">${notifyButton()}${notifySettings()}${weekPicker(s)}
             <button type="button" class="tbgg-refresh">Refresh</button></span></div>
       </div>`;
   }
@@ -484,6 +503,149 @@
       </section>`;
   }
 
+  // ---------- notifications ----------
+
+  function notifyOn() {
+    try {
+      return localStorage.getItem(NOTIFY_KEY) === "on" && Notification.permission === "granted";
+    } catch {
+      return false; // no Notification API or no storage
+    }
+  }
+
+  function notifyButton() {
+    if (typeof Notification === "undefined") return "";
+    if (Notification.permission === "denied") {
+      const tip = "Notifications are blocked for geoguessr.com in your browser settings";
+      return `<button type="button" class="tbgg-notify" disabled data-tip="${tip}">
+        🔕 Blocked</button>`;
+    }
+    const on = notifyOn();
+    const what = "a mission is taken, needs help, gets a helper or is finished";
+    const tip = on
+      ? `Notifying you when ${what}, while this tab is open`
+      : `Get notified when ${what}, while this tab is open`;
+    const label = on ? "🔔 On" : "🔕 Off";
+    return `<button type="button" class="tbgg-notify" aria-pressed="${on}" data-tip="${tip}">
+      ${label}</button>`;
+  }
+
+  // Which kinds to notify about: {take: true, ...}; everything is on unless switched off.
+  function notifyKinds() {
+    let stored = {};
+    try {
+      stored = JSON.parse(localStorage.getItem(KINDS_KEY)) ?? {};
+    } catch {
+      // No storage: use the defaults.
+    }
+    return Object.fromEntries(NOTIFY_KINDS.map(([kind]) => [kind, stored[kind] !== false]));
+  }
+
+  function setNotifyKind(kind, wanted) {
+    try {
+      localStorage.setItem(KINDS_KEY, JSON.stringify({ ...notifyKinds(), [kind]: wanted }));
+    } catch {
+      // Storage blocked: the choice lasts until the next redraw.
+    }
+  }
+
+  function notifySettings() {
+    if (typeof Notification === "undefined") return "";
+    const kinds = notifyKinds();
+    const boxes = NOTIFY_KINDS.map(([kind, label]) => {
+      const checked = kinds[kind] ? " checked" : "";
+      return `<label><input type="checkbox" class="tbgg-kind" value="${kind}"${checked}>
+        ${esc(label)}</label>`;
+    });
+    return `
+      <details class="tbgg-settings"${state.menuOpen ? " open" : ""}>
+        <summary aria-label="What to notify about" data-tip="What to notify about">⚙</summary>
+        <div class="tbgg-menu">${boxes.join("")}</div>
+      </details>`;
+  }
+
+  async function toggleNotify(panel) {
+    const on = !notifyOn();
+    // Asking for permission has to happen right here, in response to the click.
+    const permission = on ? await Notification.requestPermission() : Notification.permission;
+    if (!on || permission === "granted") {
+      try {
+        localStorage.setItem(NOTIFY_KEY, on ? "on" : "off");
+      } catch {
+        // Storage blocked: notifications can't be remembered, so they stay off.
+      }
+    }
+    console.info(`[club-progress] notifications ${notifyOn() ? "on" : "off"}`, { permission });
+    // Show one right away, so it's clear whether the browser and OS let them through. No tag:
+    // a notification reusing an earlier tag replaces it silently instead of alerting.
+    if (notifyOn()) {
+      const body = "You'll be notified about missions while the Progress tab is open.";
+      new Notification("Club mission notifications are on", { body });
+    }
+    refresh(panel);
+  }
+
+  // What happened to one mission since the last refresh. Finishing it says it all (helpers
+  // included); otherwise report taking it, asking for help and each new helper.
+  function tileEvents(t, old, nick, title) {
+    const id = t.missionId;
+    const owner = nick(t.claimedBy);
+    if (t.completed) {
+      if (old.completed) return [];
+      const help = t.helpers.length ? ` · helped by ${t.helpers.map(nick).join(", ")}` : "";
+      return [{ tag: `done-${id}`, title: `${owner} finished a mission`, body: title + help }];
+    }
+    const events = [];
+    if (!old.claimedBy) {
+      events.push({ tag: `take-${id}`, title: `${owner} took a mission`, body: title });
+    }
+    if (t.helpRequestedAt && !old.helpRequestedAt) {
+      events.push({ tag: `ask-${id}`, title: `${owner} asked for help`, body: title });
+    }
+    for (const h of t.helpers.filter((h) => !old.helpers.includes(h))) {
+      const who = `${nick(h)} is helping ${owner}`;
+      events.push({ tag: `help-${id}-${h}`, title: who, body: title });
+    }
+    return events;
+  }
+
+  function boardEvents(board, seen, nick) {
+    // First look at the board, or a new week: nothing to compare with yet.
+    if (!seen || seen.periodKey !== board.periodKey) return [];
+    const before = new Map(seen.boards.flatMap((b) => b.tiles).map((t) => [t.missionId, t]));
+    return board.boards
+      .flatMap((b) => b.tiles)
+      .filter((t) => t.claimedBy && before.has(t.missionId))
+      .flatMap((t) =>
+        tileEvents(t, before.get(t.missionId), nick, tileTitle(t, board.templates ?? {})),
+      );
+  }
+
+  function notifyChanges(board, nicks) {
+    const nick = (id) => nicks.get(id) ?? id.slice(0, 8);
+    const first = !state.seen;
+    const events = boardEvents(board, state.seen, nick);
+    state.seen = board; // kept up to date even while off, so turning on doesn't replay old news
+    const on = notifyOn();
+    const kinds = notifyKinds();
+    const wanted = events.filter((e) => kinds[e.tag.split("-")[0]]);
+    // Leave a trace in the console, so it's possible to tell why a notification didn't show.
+    const skipped = events.length - wanted.length;
+    const status = first
+      ? "first load, only recording the board"
+      : `${events.length} change(s)${skipped ? `, ${skipped} switched off in ⚙` : ""}`;
+    console.info(
+      `[club-progress] ${new Date().toISOString().slice(11, 19)} UTC: ${status}; ` +
+        `notifications ${on ? "on" : `off (setting or permission: ${Notification.permission})`}`,
+      events.map((e) => `${e.title}: ${e.body}`),
+    );
+    if (!on) return;
+    for (const e of wanted) {
+      const n = new Notification(e.title, { body: e.body, tag: `tbgg-${e.tag}` });
+      n.addEventListener("click", () => window.focus());
+    }
+  }
+
   async function refresh(panel) {
     panel.querySelector(".tbgg-refresh")?.setAttribute("disabled", "");
     try {
@@ -492,6 +654,7 @@
         getJson(`${BOARD_API}/previous`).catch(() => null), // null until a week has ended
         loadNicks(),
       ]);
+      notifyChanges(current, nicks);
       const weeks = loadWeeks();
       saveWeek(weeks, current, nicks);
       saveWeek(weeks, previous, nicks);
@@ -541,19 +704,33 @@
     tab.tabIndex = active ? 0 : -1;
   }
 
+  // The panel's contents are redrawn on every refresh, so listen on the panel itself.
+  function wirePanel(panel) {
+    panel.addEventListener("click", (e) => {
+      if (e.target.closest(".tbgg-refresh")) refresh(panel);
+      if (e.target.closest(".tbgg-notify")) toggleNotify(panel);
+      const menu = panel.querySelector(".tbgg-settings");
+      if (menu?.open && !e.target.closest(".tbgg-settings")) menu.open = false;
+    });
+    panel.addEventListener("change", (e) => {
+      if (e.target.matches(".tbgg-kind")) setNotifyKind(e.target.value, e.target.checked);
+      if (!e.target.matches(".tbgg-week")) return;
+      state.week = e.target.selectedIndex === 0 ? null : e.target.value;
+      refresh(panel);
+    });
+    // "toggle" doesn't bubble, so catch it on the way down.
+    const onToggle = (e) => {
+      if (e.target.matches(".tbgg-settings")) state.menuOpen = e.target.open;
+    };
+    panel.addEventListener("toggle", onToggle, true);
+  }
+
   function showPanel(wrapper) {
     let panel = document.getElementById(PANEL_ID);
     if (!panel) {
       panel = document.createElement("div");
       panel.id = PANEL_ID;
-      panel.addEventListener("click", (e) => {
-        if (e.target.closest(".tbgg-refresh")) refresh(panel);
-      });
-      panel.addEventListener("change", (e) => {
-        if (!e.target.matches(".tbgg-week")) return;
-        state.week = e.target.selectedIndex === 0 ? null : e.target.value;
-        refresh(panel);
-      });
+      wirePanel(panel);
       wrapper.after(panel);
     }
     panel.hidden = false;
@@ -566,13 +743,15 @@
     state.active = true;
     state.nicks = null; // pick up membership changes
     state.week = null; // always open on the current week
+    state.seen = null; // the first load after opening the tab only records the board
     state.prevTab = tabs.list.querySelector('[role="tab"][data-state="active"]');
     if (state.prevTab) setTabState(state.prevTab, false);
     setTabState(button, true);
     for (const el of contentSiblings(tabs.wrapper)) el.setAttribute(HIDE_ATTR, "");
     const panel = showPanel(tabs.wrapper);
     refresh(panel);
-    state.timer = setInterval(() => document.hidden || refresh(panel), REFRESH_MS);
+    // In a background browser tab only keep refreshing if there is something to notify about.
+    state.timer = setInterval(() => (document.hidden && !notifyOn()) || refresh(panel), REFRESH_MS);
   }
 
   function deactivate() {
@@ -696,7 +875,7 @@
       color: rgb(255 255 255 / 65%);
     }
     .tbgg-actions { display: flex; gap: 0.5rem; margin-left: auto; }
-    .tbgg-week, .tbgg-refresh {
+    .tbgg-notify, .tbgg-week, .tbgg-refresh {
       padding: 0.3rem 0.9rem;
       border: 1px solid rgb(255 255 255 / 25%);
       border-radius: 999px;
@@ -706,7 +885,42 @@
       cursor: pointer;
     }
     .tbgg-week option { background: #1b1040; color: #fff; }
-    .tbgg-week:hover, .tbgg-refresh:hover { background: rgb(255 255 255 / 20%); }
+    :is(.tbgg-notify, .tbgg-week, .tbgg-refresh):hover { background: rgb(255 255 255 / 20%); }
+    .tbgg-notify[aria-pressed="true"] { border-color: #6cb928; background: rgb(108 185 40 / 25%); }
+    .tbgg-notify[disabled] { opacity: 0.5; cursor: default; }
+    /* Above the sections below it, so the ⚙ menu isn't covered by them. */
+    #${PANEL_ID} .tbgg-head { position: relative; z-index: 2; }
+    .tbgg-settings { position: relative; }
+    .tbgg-settings summary {
+      display: grid;
+      place-items: center;
+      width: 2rem;
+      height: 100%;
+      border: 1px solid rgb(255 255 255 / 25%);
+      border-radius: 999px;
+      background: rgb(255 255 255 / 10%);
+      list-style: none;
+      cursor: pointer;
+    }
+    .tbgg-settings summary::-webkit-details-marker { display: none; }
+    .tbgg-settings summary:hover, .tbgg-settings[open] summary {
+      background: rgb(255 255 255 / 20%);
+    }
+    .tbgg-menu {
+      position: absolute;
+      top: calc(100% + 0.4rem);
+      right: 0;
+      display: grid;
+      gap: 0.4rem;
+      padding: 0.75rem 1rem;
+      border: 1px solid rgb(255 255 255 / 18%);
+      border-radius: 0.75rem;
+      background: #1b1040;
+      box-shadow: 0 6px 24px rgb(0 0 0 / 45%);
+      white-space: nowrap;
+    }
+    .tbgg-menu label { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; }
+    .tbgg-menu input { accent-color: #6cb928; }
     .tbgg-refresh[disabled] { opacity: 0.5; cursor: default; }
     .tbgg-overall { margin-top: 1rem; }
     .tbgg-overall-top {
