@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Club Progress
 // @namespace    https://github.com/alech/geoguessr-club-progress
-// @version      1.9.0
+// @version      1.9.1
 // @description  Club page "Progress" tab: weekly mission progress per member and challenge day.
 // @author       Alexander Klink
 // @homepageURL  https://github.com/alech/geoguessr-club-progress
@@ -23,6 +23,7 @@
   const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const OPEN_WARN_MS = 6 * 3_600_000;
   const OPEN_ALERT_MS = 12 * 3_600_000;
+  const HELPS_PER_DAY = 2; // GeoGuessr's limit on missions one member can help with a day
   const BOARD_API = "/api/v4/missions/club/board";
   const WEEKS_KEY = "tbgg-progress-weeks";
   const NOTIFY_KEY = "tbgg-progress-notify";
@@ -154,6 +155,23 @@
     };
   }
 
+  // The API doesn't say when someone joined as a helper, only that it was between the day
+  // the mission was taken and the day it was finished. Helping is limited to two missions a
+  // day, so go through one helper's missions by finish time and put each on the earliest day
+  // in its window that still has room. Missions helped the day after they were taken thus
+  // move to that day instead of overfilling the first one.
+  function placeHelps(days, helps) {
+    const last = days.length - 1;
+    const sorted = [...helps].sort((a, b) => a.completedAt.localeCompare(b.completedAt));
+    for (const t of sorted) {
+      const from = Math.max(0, t.takenDay);
+      const to = Math.min(last, t.day);
+      let day = from;
+      while (day < to && days[day].helped.length >= HELPS_PER_DAY) day += 1;
+      if (day >= 0 && day <= last) days[day].helped.push(t);
+    }
+  }
+
   function summarizePlayers(tiles, nicks, dayCount) {
     const players = new Map();
     const get = (id) => {
@@ -171,20 +189,21 @@
       return players.get(id);
     };
     for (const id of nicks.keys()) get(id);
+    const helpsBy = new Map();
     for (const t of tiles) {
       const p = get(t.claimedBy);
       if (!t.completed) {
         p.open = t;
         continue;
       }
-      const inWeek = (d) => d >= 0 && d < dayCount;
       p.completed += 1;
-      if (inWeek(t.takenDay)) p.days[t.takenDay].done.push(t);
+      if (t.takenDay >= 0 && t.takenDay < dayCount) p.days[t.takenDay].done.push(t);
       for (const h of t.helpers) {
         get(h).helped += 1;
-        if (inWeek(t.takenDay)) get(h).days[t.takenDay].helped.push(t);
+        helpsBy.set(h, [...(helpsBy.get(h) ?? []), t]);
       }
     }
+    for (const [h, helps] of helpsBy) placeHelps(get(h).days, helps);
     return [...players.values()].sort(
       (a, b) => b.completed - a.completed || b.helped - a.helped || a.nick.localeCompare(b.nick),
     );
@@ -410,8 +429,8 @@
     });
     return `
       <section>
-        <h3>Members <small>✓ finished · small ✓ helped · on the day the mission was taken ·
-          hover for details</small></h3>
+        <h3>Members <small>✓ finished, on the day the mission was taken · small ✓ helped, on
+          the earliest day that fits the two-a-day limit · hover for details</small></h3>
         <div class="tbgg-scroll"><table class="tbgg-players">
           <thead><tr>
             <th class="name">Player</th><th class="num">Done</th><th class="num">Helped</th>

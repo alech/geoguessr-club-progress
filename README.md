@@ -25,10 +25,12 @@ userscript adds a **Progress** tab next to **Stats** on your club page that does
   days ahead the target line moves to the number still needed.
 - **Members** — every member with the number of missions finished and helped,
   and a check mark per challenge day: a large green ✓ for a mission they
-  finished, a small purple ✓ for one they helped with. Both sit on the day the
-  mission was taken, even if it was finished later, so the grid lines up with
-  the daily limits (one mission taken a day, at most two helps). Hover a cell to
-  see which missions it was.
+  finished, a small purple ✓ for one they helped with. Missions sit on the day
+  they were taken, even if they were finished later. GeoGuessr doesn't say when
+  someone started helping, so a help goes on the earliest day between taking and
+  finishing the mission that still fits the limit of two helps a day. That way
+  the grid lines up with the daily limits. Hover a cell to see which missions it
+  was.
 - **Missions** — every finished mission, grouped by challenge day, with who took
   it, when, and who helped.
 - **Earlier weeks** — a week picker next to the Refresh button shows the same
