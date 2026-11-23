@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         GeoGuessr Club Progress
 // @namespace    https://github.com/alech/geoguessr-club-progress
-// @version      1.9.1
+// @version      1.9.2
 // @description  Club page "Progress" tab: weekly mission progress per member and challenge day.
 // @author       Alexander Klink
 // @homepageURL  https://github.com/alech/geoguessr-club-progress
@@ -704,7 +704,7 @@
 
   function findTabs() {
     if (!/^(\/[a-z]{2})?\/clubs\/my\/?$/.test(location.pathname)) return null;
-    const wrapper = document.querySelector('[class*="club-tabs_tabsWrapper"]');
+    const wrapper = document.querySelector('[class*="_tabsWrapper_"]');
     const list = wrapper?.querySelector('[role="tablist"]');
     return list ? { wrapper, list } : null;
   }
@@ -800,8 +800,9 @@
     const button = template.cloneNode(true);
     button.id = TAB_ID;
     button.removeAttribute("aria-controls");
-    button.querySelectorAll("span > span").forEach((el) => el.remove()); // notification dots
-    button.querySelector("span").textContent = "Progress";
+    // Replacing the label's text also drops its notification dot.
+    const label = button.querySelector('[class*="_tabLabel_"]') ?? button.querySelector("span");
+    label.textContent = "Progress";
     setTabState(button, false);
     button.addEventListener("click", () => activate(tabs, button));
     const stats = tabs.list.querySelector('[role="tab"][id$="-tab-stats"]');
